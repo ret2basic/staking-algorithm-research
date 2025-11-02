@@ -1,0 +1,1 @@
+{"id":"cbf179c7eed17fa5adf73ea932cc0b2d","source_id_to_path":{"0":"src/MasterChef.sol","1":"src/SushiToken.sol","2":"src/access/Ownable.sol","3":"src/token/ERC20/ERC20.sol","4":"src/token/ERC20/IERC20.sol","5":"src/token/ERC20/utils/SafeERC20.sol","6":"src/utils/Address.sol"},"language":"Solidity"}

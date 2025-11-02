@@ -5,7 +5,10 @@ The MasterChef contract uses a "rewardDebt" accounting mechanism to track reward
 - `rewardDebt`: User's debt, used to calculate pending rewards
 - Formula: `pending = (user.amount * pool.accSushiPerShare) - user.rewardDebt`
 
-Note: I rearranged the code to emphasize the rewards concepts.
+**Note:**
+
+1. I rearranged the code to emphasize the rewards concepts. You just have to read the 3 functions under "Core functions" section carefully.
+2. MasterChef.sol is rewritten in solidity 0.8.24 for better readability and be compatible with current foundry version.
 
 ## MasterChef.sol Walkthrough
 
@@ -40,3 +43,14 @@ This section distills the RareSkills article on staking algorithms into a tour o
 
 During a typical `deposit` call the sequence is: update the pool to “catch up” rewards, pay the caller their pending SUSHI using the accumulator, transfer in new LP tokens, and finally refresh the caller's `rewardDebt`. `withdraw` mirrors the flow but burns LP balance first. Because all state transitions funnel through these functions, the contract never has to iterate over every staker—the core gas optimization highlighted by RareSkills.
 
+## Appendix: Migration
+
+The optional `migrate` hook lets governance swap a pool’s LP token for a new contract without interrupting deposits. DeFi protocols frequently upgrade or move liquidity to newer AMMs, and without this escape hatch every staker would have to withdraw, migrate, and restake manually—risking slippage, downtime, and lost rewards. When `migrate` runs, MasterChef approves the configured `IMigratorChef` to pull the entire LP balance, invokes `migrate` to receive replacement tokens, and verifies the migrator returned the exact same balance so user stakes remain untouched. Because the new LP token address is stored back into `poolInfo`, subsequent deposits and withdrawals seamlessly use the migrated asset while any misbehaving migrator reverts via the balance parity check.
+
+## Appendix: Multiplier and bonus
+
+`getMultiplier` encapsulates the emission schedule: during the promotional window, blocks earn `BONUS_MULTIPLIER * sushiPerBlock`, and once `bonusEndBlock` passes the multiplier falls back to `1`. By multiplying the per-block emission by this factor before dividing by `totalAllocPoint`, `updatePool` boosts early stakers without touching pool weights or per-user math. Because the bonus only applies between `_from` and `_to`, even partial intervals across the cutoff are prorated, ensuring that the bonus ends cleanly and latecomers cannot claim retroactive rewards.
+
+## Appendix: allocPoint
+
+Each pool’s `allocPoint` is its share of the global emission pie: during `updatePool` the contract multiplies the base reward by `allocPoint / totalAllocPoint`, so doubling a pool’s points literally doubles its per-block SUSHI compared to an unchanged pool. This weighting happens before rewards reach the `accSushiPerShare` accumulator, which means user-level math stays identical regardless of how many pools exist or how governance rebalances incentives. Because `set` updates `totalAllocPoint` in sync with the new value, the ratio across all pools always sums to 100%, preventing “phantom” inflation when weights change.

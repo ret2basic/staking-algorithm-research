@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity 0.6.12;
+pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/EnumerableSet.sol";
-import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "./token/ERC20/IERC20.sol";
+import "./token/ERC20/utils/SafeERC20.sol";
+import "./access/Ownable.sol";
 import "./SushiToken.sol";
 
 interface IMigratorChef {
@@ -30,25 +28,25 @@ interface IMigratorChef {
 //
 // Have fun reading it. Hopefully it's bug-free. God bless.
 contract MasterChef is Ownable {
-    using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
     // Info of each user.
     // @audit-info This is the user (local) level accounting
+    /*
+     * We do some fancy math here. Basically, any point in time, the amount of SUSHIs entitled to a user but is pending to
+     * be distributed is:
+     *
+     *   pending reward = (user.amount * pool.accSushiPerShare) - user.rewardDebt
+     *
+     * Whenever a user deposits or withdraws LP tokens to a pool. Here's what happens:
+     *   1. The pool's `accSushiPerShare` (and `lastRewardBlock`) gets updated.
+     *   2. User receives the pending reward sent to his/her address.
+     *   3. User's `amount` gets updated.
+     *   4. User's `rewardDebt` gets updated.
+     */
     struct UserInfo {
         uint256 amount; // How many LP tokens the user has provided.
         uint256 rewardDebt; // Reward debt. See explanation below.
-            //
-            // We do some fancy math here. Basically, any point in time, the amount of SUSHIs
-            // entitled to a user but is pending to be distributed is:
-            //
-            //   pending reward = (user.amount * pool.accSushiPerShare) - user.rewardDebt
-            //
-            // Whenever a user deposits or withdraws LP tokens to a pool. Here's what happens:
-            //   1. The pool's `accSushiPerShare` (and `lastRewardBlock`) gets updated.
-            //   2. User receives the pending reward sent to his/her address.
-            //   3. User's `amount` gets updated.
-            //   4. User's `rewardDebt` gets updated.
     }
 
     // Info of each pool.
@@ -96,7 +94,7 @@ contract MasterChef is Ownable {
         uint256 _sushiPerBlock,
         uint256 _startBlock,
         uint256 _bonusEndBlock
-    ) public {
+    ) {
         sushi = _sushi;
         devaddr = _devaddr;
         sushiPerBlock = _sushiPerBlock;
@@ -112,12 +110,12 @@ contract MasterChef is Ownable {
         UserInfo storage user = userInfo[_pid][msg.sender];
         updatePool(_pid);
         if (user.amount > 0) {
-            uint256 pending = user.amount.mul(pool.accSushiPerShare).div(1e12).sub(user.rewardDebt);
+            uint256 pending = (user.amount * pool.accSushiPerShare) / 1e12 - user.rewardDebt;
             safeSushiTransfer(msg.sender, pending);
         }
-        pool.lpToken.safeTransferFrom(address(msg.sender), address(this), _amount);
-        user.amount = user.amount.add(_amount);
-        user.rewardDebt = user.amount.mul(pool.accSushiPerShare).div(1e12);
+        pool.lpToken.safeTransferFrom(msg.sender, address(this), _amount);
+        user.amount += _amount;
+        user.rewardDebt = (user.amount * pool.accSushiPerShare) / 1e12;
         emit Deposit(msg.sender, _pid, _amount);
     }
 
@@ -127,11 +125,11 @@ contract MasterChef is Ownable {
         UserInfo storage user = userInfo[_pid][msg.sender];
         require(user.amount >= _amount, "withdraw: not good");
         updatePool(_pid);
-        uint256 pending = user.amount.mul(pool.accSushiPerShare).div(1e12).sub(user.rewardDebt);
+        uint256 pending = (user.amount * pool.accSushiPerShare) / 1e12 - user.rewardDebt;
         safeSushiTransfer(msg.sender, pending);
-        user.amount = user.amount.sub(_amount);
-        user.rewardDebt = user.amount.mul(pool.accSushiPerShare).div(1e12);
-        pool.lpToken.safeTransfer(address(msg.sender), _amount);
+        user.amount -= _amount;
+        user.rewardDebt = (user.amount * pool.accSushiPerShare) / 1e12;
+        pool.lpToken.safeTransfer(msg.sender, _amount);
         emit Withdraw(msg.sender, _pid, _amount);
     }
 
@@ -147,11 +145,25 @@ contract MasterChef is Ownable {
             return;
         }
         uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
-        uint256 sushiReward = multiplier.mul(sushiPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
-        sushi.mint(devaddr, sushiReward.div(10));
+        uint256 sushiReward = (multiplier * sushiPerBlock * pool.allocPoint) / totalAllocPoint;
+        sushi.mint(devaddr, sushiReward / 10);
         sushi.mint(address(this), sushiReward);
-        pool.accSushiPerShare = pool.accSushiPerShare.add(sushiReward.mul(1e12).div(lpSupply));
+        pool.accSushiPerShare += (sushiReward * 1e12) / lpSupply;
         pool.lastRewardBlock = block.number;
+    }
+
+    // Return reward multiplier over the given _from to _to block.
+    function getMultiplier(uint256 _from, uint256 _to) public view returns (uint256) {
+        if (_to <= bonusEndBlock) {
+            // @audit-info Entire interval is before the bonus cutoff, so every block gets boosted.
+            return (_to - _from) * BONUS_MULTIPLIER;
+        } else if (_from >= bonusEndBlock) {
+            // @audit-info Interval starts after the bonus window, emit the base rate (multiplier 1).
+            return _to - _from;
+        } else {
+            // @audit-info Interval straddles the cutoff; boost the early portion and leave the rest unboosted.
+            return (bonusEndBlock - _from) * BONUS_MULTIPLIER + (_to - bonusEndBlock);
+        }
     }
 
     // ------------------ Not-so-important functions ------------------
@@ -168,8 +180,9 @@ contract MasterChef is Ownable {
     function emergencyWithdraw(uint256 _pid) public {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
-        pool.lpToken.safeTransfer(address(msg.sender), user.amount);
-        emit EmergencyWithdraw(msg.sender, _pid, user.amount);
+        uint256 amount = user.amount;
+        pool.lpToken.safeTransfer(msg.sender, amount);
+        emit EmergencyWithdraw(msg.sender, _pid, amount);
         user.amount = 0;
         user.rewardDebt = 0;
     }
@@ -200,17 +213,6 @@ contract MasterChef is Ownable {
         return poolInfo.length;
     }
 
-    // Return reward multiplier over the given _from to _to block.
-    function getMultiplier(uint256 _from, uint256 _to) public view returns (uint256) {
-        if (_to <= bonusEndBlock) {
-            return _to.sub(_from).mul(BONUS_MULTIPLIER);
-        } else if (_from >= bonusEndBlock) {
-            return _to.sub(_from);
-        } else {
-            return bonusEndBlock.sub(_from).mul(BONUS_MULTIPLIER).add(_to.sub(bonusEndBlock));
-        }
-    }
-
     // View function to see pending SUSHIs on frontend.
     function pendingSushi(uint256 _pid, address _user) external view returns (uint256) {
         PoolInfo storage pool = poolInfo[_pid];
@@ -219,10 +221,10 @@ contract MasterChef is Ownable {
         uint256 lpSupply = pool.lpToken.balanceOf(address(this));
         if (block.number > pool.lastRewardBlock && lpSupply != 0) {
             uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
-            uint256 sushiReward = multiplier.mul(sushiPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
-            accSushiPerShare = accSushiPerShare.add(sushiReward.mul(1e12).div(lpSupply));
+            uint256 sushiReward = (multiplier * sushiPerBlock * pool.allocPoint) / totalAllocPoint;
+            accSushiPerShare += (sushiReward * 1e12) / lpSupply;
         }
-        return user.amount.mul(accSushiPerShare).div(1e12).sub(user.rewardDebt);
+        return (user.amount * accSushiPerShare) / 1e12 - user.rewardDebt;
     }
 
     // Update dev address by the previous dev.
@@ -240,7 +242,7 @@ contract MasterChef is Ownable {
             massUpdatePools();
         }
         uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
-        totalAllocPoint = totalAllocPoint.add(_allocPoint);
+        totalAllocPoint += _allocPoint;
         poolInfo.push(
             PoolInfo({lpToken: _lpToken, allocPoint: _allocPoint, lastRewardBlock: lastRewardBlock, accSushiPerShare: 0})
         );
@@ -251,8 +253,9 @@ contract MasterChef is Ownable {
         if (_withUpdate) {
             massUpdatePools();
         }
-        totalAllocPoint = totalAllocPoint.sub(poolInfo[_pid].allocPoint).add(_allocPoint);
-        poolInfo[_pid].allocPoint = _allocPoint;
+        PoolInfo storage pool = poolInfo[_pid];
+        totalAllocPoint = totalAllocPoint - pool.allocPoint + _allocPoint;
+        pool.allocPoint = _allocPoint;
     }
 
     // Set the migrator contract. Can only be called by the owner.
