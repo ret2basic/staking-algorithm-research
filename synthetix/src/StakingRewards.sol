@@ -71,11 +71,17 @@ contract StakingRewards is IStakingRewards, RewardsDistributionRecipient, Reentr
 
     /* ========== MODIFIERS ========== */
 
+    // @audit-info PAY ATTENTION, the call chain is a bit confusing
+    // @audit-info This modifier is the key of the Synthetix staking algorithm
     modifier updateReward(address account) {
+        // timeDelta = lastTimeRewardApplicable() - lastUpdateTime
         rewardPerTokenStored = rewardPerToken();
+        // rewardPerTokenStored += timeDelta * rewardRate / supplyStaked
         lastUpdateTime = lastTimeRewardApplicable();
         if (account != address(0)) {
+            // rewards[account] += balances[account] * (rewardPerTokenStored - userRewardPerTokenPaid[account])
             rewards[account] = earned(account);
+            // userRewardPerTokenPaid[account] = rewardPerTokenStored
             userRewardPerTokenPaid[account] = rewardPerTokenStored;
         }
         _;
