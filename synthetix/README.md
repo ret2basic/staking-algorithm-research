@@ -1,4 +1,4 @@
-# Synthetix StakingRewards Foundry Project
+# Synthetix staking algorithm
 
 Minimal Foundry setup for researching the Synthetix staking algorithm.
 
