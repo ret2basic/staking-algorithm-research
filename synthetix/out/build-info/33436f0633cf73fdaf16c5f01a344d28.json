@@ -1,0 +1,1 @@
+{"id":"33436f0633cf73fdaf16c5f01a344d28","source_id_to_path":{"0":"src/Owned.sol","1":"src/Pausable.sol","2":"src/RewardsDistributionRecipient.sol","3":"src/StakingRewards.sol","4":"src/interfaces/IStakingRewards.sol","5":"src/token/ERC20/IERC20.sol","6":"src/token/ERC20/utils/SafeERC20.sol","7":"src/utils/Address.sol","8":"src/utils/ReentrancyGuard.sol"},"language":"Solidity"}

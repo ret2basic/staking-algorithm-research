@@ -1,4 +1,4 @@
-pragma solidity ^0.5.16;
+pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/StakingRewards.sol";
@@ -46,22 +46,17 @@ contract StakingRewardsTest is Test {
     MockERC20 public stakingToken;
     address public owner;
     address public rewardsDistribution;
-    
+
     function setUp() public {
         owner = address(this);
         rewardsDistribution = address(0x1);
-        
+
         rewardsToken = new MockERC20("Reward Token", "RWD");
         stakingToken = new MockERC20("Staking Token", "STK");
-        
-        stakingRewards = new StakingRewards(
-            owner,
-            rewardsDistribution,
-            address(rewardsToken),
-            address(stakingToken)
-        );
+
+        stakingRewards = new StakingRewards(owner, rewardsDistribution, address(rewardsToken), address(stakingToken));
     }
-    
+
     function testInitialState() public {
         assertEq(address(stakingRewards.rewardsToken()), address(rewardsToken));
         assertEq(address(stakingRewards.stakingToken()), address(stakingToken));

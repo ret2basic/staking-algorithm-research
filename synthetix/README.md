@@ -1,54 +1,27 @@
 # Synthetix staking algorithm
 
-Minimal Foundry setup for researching the Synthetix staking algorithm.
+This walkthrough distills the RareSkills article on staking algorithms into the concrete mechanics implemented in `src/StakingRewards.sol`.
 
-## Structure
+## Reward accrual via timestamp catch-up
 
-```
-synthetix/
-├── src/
-│   ├── StakingRewards.sol              # Main staking contract
-│   ├── Owned.sol                       # Ownership contract
-│   ├── Pausable.sol                    # Pausable functionality
-│   ├── RewardsDistributionRecipient.sol # Rewards distribution
-│   └── interfaces/
-│       └── IStakingRewards.sol         # Interface
-├── test/
-│   └── StakingRewards.t.sol            # Test file
-├── lib/                                 # Dependencies (OpenZeppelin, forge-std)
-├── foundry.toml                         # Foundry configuration
-└── remappings.txt                       # Import remappings
-```
+The contract streams rewards at a fixed `rewardRate` until `periodFinish`, but it defers payout until a mutating call arrives, mirroring the article's "catch-up" idea and relying on the invariant that balances only move during explicit transactions. The helper `lastTimeRewardApplicable()` keeps the accumulator from growing past the campaign by returning `periodFinish` once the window expires. With those guardrails in place, `rewardPerToken()` captures how much reward a single staked token has earned "since the beginning of time" by considering the seconds elapsed since `lastUpdateTime`, multiplying by `rewardRate`, scaling by `1e18` for precision, and dividing by `_totalSupply`, exactly matching the article's global reward-per-token counter.
 
-## Dependencies
+## Per-user snapshots instead of reward debt
 
-- OpenZeppelin Contracts v2.3.0 (Solidity 0.5.x compatible)
-- Forge Standard Library
+Before any stake, withdraw, or claim logic executes, the `updateReward(account)` modifier advances `rewardPerTokenStored` to the latest value and refreshes `lastUpdateTime`, ensuring future calls only consider new time slices. Rather than MasterChef's reward-debt subtraction, Synthetix snapshots `userRewardPerTokenPaid`; the difference between that snapshot and the current accumulator, multiplied by the user's balance, is added to the deferred `rewards[account]` bucket. Because payouts remain in this mapping until `getReward()` runs, users can batch claims and avoid dust transfers, echoing the RareSkills discussion about Synthetix's storage-heavy yet operationally simple approach.
 
-## Building
+## Core flows: stake, withdraw, claim
 
-```bash
-forge build --skip test
-```
+Calling `stake(amount)` requires a positive value, settles pending rewards via the modifier, updates `_totalSupply` and `_balances`, and pulls tokens with `safeTransferFrom`, emitting events that mirror the user's new position. Withdrawals follow the same accrual step, then burn stake from supply and balance before returning tokens, allowing partial exits without claiming because rewards are already settled. When `getReward()` executes, the caller's deferred balance is zeroed out and the reward token is transferred, meaning deposits and withdrawals do not automatically pay out and explicit claims are how stakers realize earnings, just as the article notes. The `exit()` helper simply sequences a full withdraw followed by `getReward()`, giving participants a one-transaction escape hatch.
 
-**Note:** Forge-std doesn't support Solidity 0.5.16, so skip the test directory during build.
+## Admin controls and emission scheduling
 
-## Testing
+Governance interacts with emissions through `notifyRewardAmount(reward)`, which starts or refreshes a program and, if a previous window is still active, folds the leftover emission into the new total so `rewardRate` remains continuous and loyal stakers are not underpaid. The guard `rewardRate <= balance / rewardsDuration` enforces that the contract is fully funded for the announced schedule, reflecting Synthetix's assumption that rewards are pre-deposited rather than minted on demand. Owners can prepare for a new campaign by calling `setRewardsDuration()` after the current period ends, preventing mid-stream timeline changes, while `recoverERC20()` rescues stray tokens (other than the staking asset) to keep accounting clean.
 
-Not available with standard forge-std due to Solidity version constraints. Consider upgrading the contracts to Solidity 0.8.x for testing support.
+## Architectural contrasts with MasterChef
 
-## Key Contracts
+Synthetix uses `block.timestamp` with a fixed-duration window, whereas MasterChef relies on block numbers and can run indefinitely with adjustable pools. Emissions stream from pre-funded balances rather than being minted during updates, a consequence of Synthetix's governance-controlled reward pool. Because the contract serves a single staking market, there are no allocation weights or pool arrays, and bookkeeping uses per-user snapshots plus deferred rewards instead of the reward-debt pattern; the RareSkills article points out that this costs a bit more storage but keeps transfer logic simpler.
 
-- **StakingRewards.sol**: Implements time-weighted reward distribution
-- **Owned.sol**: Ownership pattern from Synthetix
-- **Pausable.sol**: Emergency pause functionality
-- **RewardsDistributionRecipient.sol**: Manages reward notifications
+## Putting it together
 
-## Research Focus
-
-The StakingRewards contract uses a time-weighted reward mechanism:
-- `rewardPerToken`: Calculates accumulated rewards per token over time
-- `rewardRate`: Rewards distributed per second
-- `periodFinish`: End time for the current reward period
-- Formula: `earned = (balance * (rewardPerToken - userRewardPerTokenPaid)) + rewards[account]`
-
+Whenever any staker interacts, `updateReward` advances the global accumulator, tallies that staker's newly earned rewards, and stores the latest snapshot before the core function adjusts balances or transfers tokens. Events log each step, and because only the caller's record changes, the contract scales to many participants without looping, fulfilling the efficiency goals laid out in the RareSkills discussion.

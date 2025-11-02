@@ -54,3 +54,7 @@ The optional `migrate` hook lets governance swap a pool’s LP token for a new c
 ## Appendix: allocPoint
 
 Each pool’s `allocPoint` is its share of the global emission pie: during `updatePool` the contract multiplies the base reward by `allocPoint / totalAllocPoint`, so doubling a pool’s points literally doubles its per-block SUSHI compared to an unchanged pool. This weighting happens before rewards reach the `accSushiPerShare` accumulator, which means user-level math stays identical regardless of how many pools exist or how governance rebalances incentives. Because `set` updates `totalAllocPoint` in sync with the new value, the ratio across all pools always sums to 100%, preventing “phantom” inflation when weights change.
+
+## Appendix: 1e12 precision adjustment
+
+MasterChef scales its per-share accumulator by `1e12` so that integer division does not zero out tiny reward increments when pools hold large LP balances. Because Solidity has no native decimal or fixed-point types and the rewards per deposit can be much smaller than one wei, multiplying by `1e12` before dividing by `lpSupply` preserves twelve decimal places of precision. The value is arbitrary (any large power of ten works) but `1e12` is a good trade-off: it keeps arithmetic within `uint256` range while ensuring rounding dust stays negligible when users later multiply their balance by `accSushiPerShare` and divide by the same `1e12` scale factor.
